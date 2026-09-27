@@ -8,6 +8,7 @@ import type { AspectRatio } from "@/lib/image-provider";
 import { loadLocalBranding, renameBrandingSite, saveLocalBranding, validateBrandingAsset, type BrandingSettings } from "@/lib/local-branding";
 import { clearLocalHistory, deleteLocalHistory, formatStorageBytes, getLocalHistoryStats, listLocalHistory, requestPersistentLocalHistory, saveLocalHistory, type LocalHistoryRecord, type LocalHistoryStats } from "@/lib/local-history";
 import { AUTO_SIZE_OPTION, isValidSizeValue, modelSizeTemplate, validSizeOptions, type ModelSizeOption } from "@/lib/model-sizes";
+import { prepareReferenceImage } from "@/lib/reference-image";
 
 type Status = "checking" | "locked" | "ready";
 type Theme = "light" | "dark";
@@ -189,6 +190,8 @@ export function ImageStudio({ config }: { config: PublicConfig }) {
   const [quantity, setQuantity] = useState(1);
   const [quality, setQuality] = useState<ImageQuality>("low");
   const [reference, setReference] = useState<Reference>();
+  const [referencePreparing, setReferencePreparing] = useState(false);
+  const [referenceNotice, setReferenceNotice] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [preview, setPreview] = useState<{ url: string; alt: string }>();
   const [loading, setLoading] = useState(false);
@@ -220,6 +223,8 @@ export function ImageStudio({ config }: { config: PublicConfig }) {
   const [historyError, setHistoryError] = useState("");
   const [historyNotice, setHistoryNotice] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
+  const referenceRequestId = useRef(0);
+  const referencePending = useRef(false);
   const logoInput = useRef<HTMLInputElement>(null);
   const faviconInput = useRef<HTMLInputElement>(null);
   const results = useRef<HTMLDivElement>(null);
@@ -355,34 +360,40 @@ export function ImageStudio({ config }: { config: PublicConfig }) {
     setStatus("locked");
   }
 
-  function selectReference(file: File | undefined) {
+  async function selectReference(file: File | undefined) {
     setError("");
     if (!file) return;
-    if (!["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
-      setError("参考图仅支持 PNG、JPEG 或 WebP");
-      return;
+    const requestId = ++referenceRequestId.current;
+    setReference(undefined);
+    setReferenceNotice("");
+    referencePending.current = true;
+    setReferencePreparing(true);
+    try {
+      const prepared = await prepareReferenceImage(file);
+      if (requestId !== referenceRequestId.current) return;
+      setReference({ name: file.name, dataUrl: prepared.dataUrl });
+      if (prepared.resized) setReferenceNotice(`参考图已自动缩小：${formatStorageBytes(prepared.originalBytes)} → ${formatStorageBytes(prepared.bytes)}`);
+    } catch (caught) {
+      if (requestId === referenceRequestId.current) setError(caught instanceof Error ? caught.message : "处理参考图失败");
+    } finally {
+      if (requestId === referenceRequestId.current) {
+        referencePending.current = false;
+        setReferencePreparing(false);
+      }
     }
-    if (file.size > 8 * 1024 * 1024) {
-      setError("参考图不能超过 8MB");
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => setReference({ name: file.name, dataUrl: String(reader.result) });
-    reader.onerror = () => setError("读取参考图失败");
-    reader.readAsDataURL(file);
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const image = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/"))?.getAsFile();
     if (image) {
       event.preventDefault();
-      selectReference(image);
+      void selectReference(image);
     }
   }
 
   async function generate() {
     const cleanPrompt = prompt.trim();
-    if (!cleanPrompt || loading) return;
+    if (!cleanPrompt || loading || referencePending.current) return;
     const id = crypto.randomUUID();
     const currentReference = reference;
     const localSelection = findLocalSelection(apiSettings, selectedModel);
@@ -395,6 +406,7 @@ export function ImageStudio({ config }: { config: PublicConfig }) {
     setMessages((current) => [...current, message]);
     setPrompt("");
     setReference(undefined);
+    setReferenceNotice("");
     setError("");
     setLoading(true);
     try {
@@ -452,7 +464,11 @@ export function ImageStudio({ config }: { config: PublicConfig }) {
   }
 
   function clearReference() {
+    referenceRequestId.current += 1;
+    referencePending.current = false;
     setReference(undefined);
+    setReferencePreparing(false);
+    setReferenceNotice("");
     if (fileInput.current) fileInput.current.value = "";
   }
 
@@ -692,7 +708,7 @@ export function ImageStudio({ config }: { config: PublicConfig }) {
             </div>
           )}
           <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={handlePromptKeyDown} onPaste={handlePaste} placeholder="描述你想要生成的图片..." rows={1} maxLength={2000} aria-label="图片描述" />
-          <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { selectReference(event.target.files?.[0]); event.target.value = ""; }} />
+          <input ref={fileInput} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { void selectReference(event.target.files?.[0]); event.target.value = ""; }} />
           <div className="composer-actions">
             <div className="composer-options">
               <select value={selectedModel} onChange={(event) => selectModel(event.target.value)} aria-label="模型">
@@ -710,9 +726,11 @@ export function ImageStudio({ config }: { config: PublicConfig }) {
               </select>
               <button type="button" className="composer-icon-button" onClick={() => fileInput.current?.click()} aria-label="上传参考图"><Paperclip aria-hidden="true" /></button>
             </div>
-            <button type="button" className="send-button" onClick={() => void generate()} disabled={!prompt.trim() || loading || !canGenerate} aria-label="生成图片"><ArrowUp aria-hidden="true" /></button>
+            <button type="button" className="send-button" onClick={() => void generate()} disabled={!prompt.trim() || loading || referencePreparing || !canGenerate} aria-label="生成图片"><ArrowUp aria-hidden="true" /></button>
           </div>
         </div>
+        {referencePreparing && <p className="reference-notice" role="status">正在检查并优化参考图…</p>}
+        {!referencePreparing && referenceNotice && <p className="reference-notice" role="status">{referenceNotice}</p>}
         {error && <p className="inline-error" role="alert">{error}</p>}
       </div>
     );

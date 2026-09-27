@@ -1,6 +1,5 @@
 import { z } from "zod";
-
-const MAX_REFERENCE_DATA_URL = 11 * 1024 * 1024;
+import { MAX_REFERENCE_DATA_URL } from "@/lib/reference-image-limits";
 
 const providerSchema = z.object({
   protocol: z.enum(["openai", "apimart"]).default("openai"),

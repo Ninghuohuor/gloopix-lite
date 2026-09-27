@@ -36,6 +36,19 @@ test("reference generation uses multipart edits without filesystem storage", asy
   assert.equal(result.imageUrl, "data:image/png;base64,aW1hZ2U=");
 });
 
+test("optimized WebP references keep their MIME type in edits", async () => {
+  const fetcher = async (_input: string | URL | Request, init?: RequestInit) => {
+    const form = init?.body as FormData;
+    const image = form.get("image");
+    assert.ok(image instanceof Blob);
+    assert.equal(image.type, "image/webp");
+    assert.equal(image.size, 5);
+    return Response.json({ data: [{ b64_json: "aW1hZ2U=" }] });
+  };
+  const result = await generateImage({ prompt: "edit", aspectRatio: "square", quantity: 1, referenceImage: "data:image/webp;base64,aGVsbG8=" }, fetcher as typeof fetch);
+  assert.equal(result.imageUrl, "data:image/png;base64,aW1hZ2U=");
+});
+
 test("browser provider settings override deployment defaults", async () => {
   const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
     assert.equal(String(input), "https://custom.example/api/generate");

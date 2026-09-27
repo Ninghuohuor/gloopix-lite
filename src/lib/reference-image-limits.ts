@@ -1,0 +1,4 @@
+export const MAX_REFERENCE_BYTES = 8 * 1024 * 1024;
+export const MAX_REFERENCE_INPUT_BYTES = 64 * 1024 * 1024;
+export const MAX_REFERENCE_EDGE = 3072;
+export const MAX_REFERENCE_DATA_URL = 64 + 4 * Math.ceil(MAX_REFERENCE_BYTES / 3);
